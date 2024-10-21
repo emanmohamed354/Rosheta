@@ -117,6 +117,7 @@ export const getProductCountByCategory = async (req, res) => {
                 offer: product.offer,
                 description: product.description,
                 image: product.image
+                productId:product._id
             })),
         });
     } catch (error) {
