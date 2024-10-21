@@ -2,6 +2,7 @@ import { cartModel } from "../../../DataBase/models/cart.model.js";
 import { orderModel } from "../../../DataBase/models/order.model.js";
 import { productModel } from "../../../DataBase/models/product.model.js";
 import { catchError } from "../../utiles/catchError.js";
+import { userModel } from '../../../DataBase/models/user.model.js';
 import jwt from 'jsonwebtoken';
 import axios from "axios";
 // Middleware or utility function to extract `userId` from the `token` header
@@ -163,38 +164,79 @@ export const clearCart = catchError(async (req, res) => {
 });
 
 
+export const processCashPayment = async (req, res) => {
+    const { userId, items } = req.body;
 
-export const processCashPayment = catchError(async (req, res) => {
-    const userId = extractUserIdFromToken(req); 
-
-    // Find the user's cart
-    const cart = await cartModel.findOne({ userId: userId });
-    if (!cart || cart.totalQuantity === 0) {
-        return res.status(400).json({ msg: "Cart is empty or not found" });
+    // Validate required fields
+    if (!userId || !items) {
+        return res.status(400).json({ error: 'Missing required fields: userId and items are required.' });
     }
 
-    // Create a new order
-    const order = new orderModel({
-        userId,
-        items: cart.items,
-        totalPrice: cart.totalPrice,
-        paymentMethod: 'cash',
-        status: 'pending' // or whatever initial status you want
-    });
+    try {
+        // Step 1: Validate user
+        const user = await userModel.findById(userId);
+        if (!user) {
+            return res.status(404).json({ error: 'User not found.' });
+        }
 
-    // Save the order
-    await order.save();
+        let totalPrice = 0;
+        const availableItems = [];
 
-    // Optionally, clear the user's cart after payment
-    cart.items = [];
-    cart.totalQuantity = 0;
-    cart.totalPrice = 0;
-    await cart.save();
+        // Step 2: Validate item availability and calculate total price
+        for (const item of items) {
+            const product = await productModel.findById(item.productId);
+            if (!product) {
+                return res.status(404).json({ error: `Product ID "${item.productId}" not found.` });
+            }
+            if (product.quantity < item.quantity) {
+                return res.status(400).json({ error: `Insufficient quantity for product ID "${item.productId}". Available: ${product.quantity}, Requested: ${item.quantity}.` });
+            }
 
-    res.json({ msg: "Payment processed successfully", order });
-});
+            totalPrice += product.price * item.quantity;
+            availableItems.push({
+                productId: product._id,
+                quantity: item.quantity,
+                price: product.price,
+            });
 
+        }
 
+        // Step 3: Create the cash payment order
+        const newOrder = new orderModel({
+            userId: user._id,
+            items: availableItems,
+            totalPrice,
+            paymentMethod: 'cash',
+            status: 'pending', // Initial status
+        });
+
+        await newOrder.save();
+
+        // Step 4: Clear the user's cart after successful payment
+        const cart = await cartModel.findOne({ userId });
+        if (cart) {
+            cart.items = [];
+            cart.totalQuantity = 0;
+            cart.totalPrice = 0;
+            await cart.save();
+        }
+
+        // Step 5: Send successful response
+        res.status(200).json({
+            success: true,
+            message: 'Cash payment processed successfully.',
+            orderId: newOrder._id,
+            totalPrice,
+            paymentMethod: 'Cash',
+            items: availableItems,
+            user: { userId: user._id, email: user.email, firstName: user.userName },
+        });
+
+    } catch (error) {
+        console.error('Error in processing cash payment:', error);
+        res.status(500).json({ error: 'Cash payment failed', details: error.message });
+    }
+};
 
 
 

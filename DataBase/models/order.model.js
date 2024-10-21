@@ -1,6 +1,4 @@
 import mongoose from "mongoose";
-
-
 const orderSchema = new mongoose.Schema({
     userId: {
         type: mongoose.Schema.Types.ObjectId,
@@ -9,7 +7,7 @@ const orderSchema = new mongoose.Schema({
     },
     items: [
         {
-            productId: { type: mongoose.Schema.Types.ObjectId, ref: 'Product' },
+            productId: { type: mongoose.Schema.Types.ObjectId, ref: 'product' },
             quantity: { type: Number, required: true }
         }
     ],
@@ -19,16 +17,19 @@ const orderSchema = new mongoose.Schema({
     },
     paymentMethod: {
         type: String,
-        enum: ['Cash', 'Credit Card', 'PayPal'], // Example enum values
-        required: true
-    }
+        enum: ['cash', 'Credit Card', 'PayPal'],
+        default: "cash"
+    },
+    paymobOrderId:{type: String},
+    paymentToken: { type: String }
     ,
     status: {
         type: String,
-        enum: ['pending', 'completed', 'canceled'], // Enum values
-        default: 'pending' // Default value
+        enum: ['pending', 'completed', 'canceled', 'failed'], 
+        default: 'pending' 
     }
+    
 }, { timestamps: true });
-
+//256514954
 export const orderModel = mongoose.model('Order', orderSchema);
 

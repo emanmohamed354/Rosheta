@@ -70,7 +70,7 @@ export const resetPassword = async (req, res) => {
 };
 
 export const signUp = async (req, res) => {
-    const { userName, lastName, email, password, confirmPassword, age, gender, address, phone } = req.body;
+    const { userName, lastName, email, password, confirmPassword, age, gender, address, phone ,role} = req.body;
 
     // Check if passwords match
     if (password !== confirmPassword) {
@@ -95,7 +95,8 @@ export const signUp = async (req, res) => {
                 age,
                 gender,
                 address, // Directly add address without manipulation
-                phone
+                phone,
+                role
             });
             res.status(201).json({ msg: 'User created successfully' });
         }
@@ -134,7 +135,6 @@ export const signIn = async (req, res) => {
         res.status(500).json({ msg: 'Server error', error: error.message });
     }
 };
-
 export const changeMyPassword = async (req, res) => {
     const { currentPassword, newPassword, confirmNewPassword } = req.body;
     const token = req.headers.token;
@@ -143,8 +143,9 @@ export const changeMyPassword = async (req, res) => {
         return res.status(401).json({ msg: 'No token provided, authorization denied' });
     }
     try {
+
         const decoded = jwt.verify(token, 'ahmedrafat123');
-        const userId = decoded.id;
+        const userId = decoded.userId;
         const user = await userModel.findById(userId);
         if (!user) {
             return res.status(404).json({ msg: 'User not found' });
@@ -156,6 +157,7 @@ export const changeMyPassword = async (req, res) => {
         if (newPassword !== confirmNewPassword) {
             return res.status(400).json({ msg: 'New passwords do not match' });
         }
+
         const hashedNewPassword = await bcrypt.hash(newPassword, 8);
         user.password = hashedNewPassword;
         await user.save();
@@ -176,11 +178,11 @@ function generateToken(user) {
             gender: user.gender,
             phone: user.phone,
             address: user.address,
-            lastName: user.lastName, // Include lastName in the token
-            id: user._id
+            lastName: user.lastName, 
+            userId: user._id
         },
         'ahmedrafat123',
-        { expiresIn: '3h' }
+        { expiresIn: '9h' }
     );
 }
 
@@ -195,17 +197,18 @@ export const updateUserData = async (req, res) => {
 
         const isMatch = await bcrypt.compare(password, user.password);
         if (!isMatch) {
-            return res.status(400).json({ msg: 'Unmatched Password' });
+            return res.status(400).json({ msg: 'Invalid credentials' });
         }
 
         const updatedFields = {};
         if (userName) updatedFields.userName = userName;
-        if (lastName) updatedFields.lastName = lastName; 
+        if (lastName) updatedFields.lastName = lastName; // Directly update lastName
         if (age) updatedFields.age = age;
         if (gender) updatedFields.gender = gender;
-        if (address) updatedFields.address = address; 
+        if (address) updatedFields.address = address; // Directly update address
         if (phone) updatedFields.phone = phone;
 
+        // Update the user using email as the identifier
         await userModel.updateOne({ email }, { $set: updatedFields });
 
         const updatedUser = await userModel.findOne({ email });
@@ -226,18 +229,21 @@ export const updateUserData = async (req, res) => {
 
 export const getUsers = async (req, res) => {
     try {
-        const users = await userModel.find({}, '_id userName email address'); 
+        // Fetch all users from the database
+        const users = await userModel.find({}, '_id userName email'); // Fetch only the fields you want
 
+        // Check if any users were found
         if (users.length === 0) {
-            return res.status(404).json({ message: 'there is no users found' });
+            return res.status(404).json({ message: 'No users found' });
         }
+
+        // Respond with the user IDs and other selected fields
         res.status(200).json({ users });
     } catch (error) {
         console.error('Error fetching users:', error);
         res.status(500).json({ error: 'Failed to fetch users' });
     }
 };
-
 
 // export const updatePassword = async (req, res) => {
 //   const { email, newPassword } = req.body;

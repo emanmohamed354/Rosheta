@@ -1,32 +1,26 @@
 import { orderModel } from "../../../DataBase/models/order.model.js";
- import { productModel } from "../../../DataBase/models/product.model.js";
+import { productModel } from "../../../DataBase/models/product.model.js";
+
 export const getOrders = async (req, res) => {
-    const { userId } = req.query; 
+    const { userId } = req.query;
 
     try {
-        if (userId) {
-            const orders = await orderModel.find({ userId }).populate('userId', 'userName email'); 
-            return res.status(200).json({
-                success: true,
-                message: `Orders for user : ${userId}`,
-                orders,
-            });
-        }
+        const query = userId ? { userId } : {};
+        const orders = await orderModel.find(query).populate('userId', 'userName email');
 
-        const allOrders = await orderModel.find().populate('userId', 'userName email'); 
         res.status(200).json({
             success: true,
-            message: 'All orders retrieved successfully',
-            orders: allOrders,
+            message: userId ? `Orders for user: ${userId}` : 'All orders retrieved successfully',
+            orders,
         });
     } catch (error) {
         console.error('Error fetching orders:', error);
-        res.status(500).json({ message: 'Server error', error: error.message });
+        res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };
 
 export const getOrderDetails = async (req, res) => {
-    const { orderId } = req.params; 
+    const { orderId } = req.params;
 
     try {
         const order = await orderModel.findById(orderId).populate('userId', 'userName email');
@@ -34,6 +28,7 @@ export const getOrderDetails = async (req, res) => {
         if (!order) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
+
         res.status(200).json({
             success: true,
             message: `Order details for order ID: ${orderId}`,
@@ -44,51 +39,67 @@ export const getOrderDetails = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };
-
-export const updateOrderStatus = async (req, res) => {
+export const getAllOrders = async (req, res) => {
+        try {
+            const orders = await orderModel.find();
+            res.status(200).json({
+                success: true,
+                orders,
+            });
+        } catch (error) {
+            res.status(500).json({ message: "Server error", error: error.message });
+        }
+  };
+  
+  
+  export const updateOrderStatus = async (req, res) => {
     const { orderId } = req.params;
     const { status } = req.body;
 
     try {
-        if (!['pending', 'completed', 'canceled'].includes(status)) {
+        // Check for valid statuses
+        if (!['pending', 'completed', 'canceled', 'failed'].includes(status)) {
             return res.status(400).json({ success: false, message: 'Invalid status' });
         }
 
+        // Find the order
         const order = await orderModel.findById(orderId);
         if (!order) {
             return res.status(404).json({ success: false, message: 'Order not found' });
         }
 
+        // If status is 'c' for complete
         if (status === 'completed') {
-            let isAvailable = true;
-            for (const item of order.items) {
-                const product = await productModel.findOne({ name: item.productName });
-                if (!product || product.quantity < item.quantity) {
-                    isAvailable = false;
-                    break;
-                }
-            }
+            // Check product availability
+            const productChecks = await Promise.all(order.items.map(item =>
+                productModel.findById(item.productId)
+            ));
+
+            // Check if all products are available
+            const isAvailable = productChecks.every((product, index) => 
+                product && product.quantity >= order.items[index].quantity
+            );
 
             if (!isAvailable) {
                 await orderModel.findByIdAndUpdate(orderId, { status: 'canceled' }, { new: true });
                 return res.status(400).json({ success: false, message: 'Order canceled due to insufficient product quantity.' });
             }
 
-            for (const item of order.items) {
-                const product = await productModel.findOne({ name: item.productName });
+            // Update product quantities
+            await Promise.all(order.items.map(async (item) => {
+                const product = await productModel.findById(item.productId);
                 if (product) {
-                    product.quantity -= item.quantity;
-                    await product.save();
+                    product.quantity -= item.quantity; // Deduct quantity
+                    if (product.quantity < 0) product.quantity = 0; // Prevent negative quantities
+                    await product.save(); // Save updated product quantity
                 }
-            }
+            }));
         }
 
-        const updatedOrder = await orderModel.findByIdAndUpdate(
-            orderId,
-            { status },
-            { new: true }
-        );
+        // Update order status
+        const updatedOrder = await orderModel.findByIdAndUpdate(orderId, { status }, { new: true });
 
+        // Respond with the updated order
         res.status(200).json({
             success: true,
             message: 'Order status updated successfully',
@@ -99,3 +110,4 @@ export const updateOrderStatus = async (req, res) => {
         res.status(500).json({ success: false, message: 'Server error', error: error.message });
     }
 };
+

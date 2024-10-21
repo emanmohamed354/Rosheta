@@ -3,13 +3,13 @@ import { addProduct, deleteProduct, getAllProducts, updateProduct } from './prod
 import { getProductCountByCategory } from './product.controller.js';
 import multer from 'multer';
 
-const upload = multer(); // Use memory storage for direct upload
+const upload = multer(); 
 export const productRouter = express.Router();
 
-productRouter.post('/addProduct', upload.single('image'), addProduct); // Adjusted to use multer
+productRouter.post('/addProduct', upload.single('image'), addProduct); 
 productRouter.delete('/deleteProduct', deleteProduct);
 productRouter.get('/getAllProducts', getAllProducts);
-productRouter.put('/updateProduct', updateProduct); // You may want to adjust this for image uploads too
+productRouter.put('/updateProduct', updateProduct); 
 productRouter.use('/category', getProductCountByCategory); 
 
 export default productRouter;

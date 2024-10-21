@@ -21,114 +21,143 @@ export const authenticatePaymob = async (req, res) => {
     }
 };
 
-
 export const createPayment = async (req, res) => {
+    console.log('Incoming Request:', req.body);
+
     const { userId, items, paymentMethod } = req.body;
 
     // Validate required fields
     if (!userId || !items || !paymentMethod) {
-        return res.status(400).json({ error: 'Missing required fields' });
+        return res.status(400).json({ error: 'Missing required fields: userId, items, and paymentMethod are required.' });
     }
 
-    // Validate API keys
-    if (!process.env.PAYMOB_API_KEY || !process.env.PAYMOB_INTEGRATION_ID) {
-        return res.status(500).json({ error: 'Missing configurations' });
+    const { PAYMOB_API_KEY, PAYMOB_INTEGRATION_ID } = process.env;
+
+    if (!PAYMOB_API_KEY || !PAYMOB_INTEGRATION_ID) {
+        return res.status(500).json({ error: 'Missing Paymob configurations.' });
     }
 
     try {
         const user = await userModel.findById(userId);
-        if (!user) {
-            return res.status(404).json({ error: 'User not found' });
-        }
+        if (!user) return res.status(404).json({ error: 'User not found.' });
 
         let totalPrice = 0;
+        const shippingFee = 40; // Shipping fee in EGP
         const availableItems = [];
 
-        // Loop through items to check availability and calculate total price
+        // Validate item availability
         for (const item of items) {
-            const product = await productModel.findById(item.productId); // Use productId from the request
-            if (!product || product.quantity < item.quantity) {
-                return res.status(400).json({ error: `Product with ID "${item.productId}" is unavailable or insufficient quantity.` });
+            const product = await productModel.findById(item.productId);
+            if (!product) {
+                return res.status(404).json({ error: `Product ID "${item.productId}" not found.` });
             }
-
+            if (product.quantity < item.quantity) {
+                return res.status(400).json({ error: `Insufficient quantity for product ID "${item.productId}". Available: ${product.quantity}, Requested: ${item.quantity}.` });
+            }
             totalPrice += product.price * item.quantity;
-
-            availableItems.push({
-                productId: product._id,
-                quantity: item.quantity,
-                price: product.price,
-            });
+            availableItems.push({ productId: product._id, quantity: item.quantity, price: product.price });
         }
 
-        // Proceed with Paymob authentication and order creation
-        const authResponse = await axios.post('https://accept.paymobsolutions.com/api/auth/tokens', {
-            api_key: process.env.PAYMOB_API_KEY,
+        // Add shipping fee to the total price
+        totalPrice += shippingFee;
+
+        // Authenticate with Paymob
+        const authResponse = await axios.post('https://accept.paymob.com/api/auth/tokens', {
+            api_key: PAYMOB_API_KEY,
         });
         const { token } = authResponse.data;
 
+        // Prepare items for Paymob, including shipping fee
+        const shippingItem = {
+            name: 'Shipping Fee',
+            quantity: 1,
+            amount_cents: shippingFee * 100,
+        };
+
+        const itemsForPaymob = availableItems.map(item => ({
+            name: item.productId.toString(),
+            quantity: item.quantity,
+            amount_cents: item.price * 100,
+        }));
+
+        itemsForPaymob.push(shippingItem);
+
+        // Recalculate total amount in cents
+        const totalAmountCents = itemsForPaymob.reduce((sum, item) => sum + (item.amount_cents * item.quantity), 0);
+
+        // Create order
         const orderPayload = {
             auth_token: token,
             delivery_needed: 'false',
-            amount_cents: totalPrice * 100,
+            amount_cents: totalAmountCents,
             currency: 'EGP',
-            items: availableItems.map(item => ({
-                name: item.productId.toString(), // Use productId as name (or fetch the name if needed)
-                quantity: item.quantity,
-                amount_cents: item.price * 100,
-            })),
+            items: itemsForPaymob,
         };
 
-        const orderResponse = await axios.post('https://accept.paymobsolutions.com/api/ecommerce/orders', orderPayload);
-        const orderId = orderResponse.data.id;
+        console.log('Order Payload:', orderPayload);
 
-        const paymentKeyResponse = await axios.post('https://accept.paymobsolutions.com/api/acceptance/payment_keys', {
+        const orderResponse = await axios.post('https://accept.paymob.com/api/ecommerce/orders', orderPayload);
+        const paymobOrderId = orderResponse.data.id; // Get Paymob order ID
+
+        // Create payment key
+        const paymentKeyPayload = {
             auth_token: token,
-            amount_cents: totalPrice * 100,
+            amount_cents: totalAmountCents,
             expiration: 3600,
-            order_id: orderId,
+            order_id: paymobOrderId, // Use Paymob order ID
             billing_data: {
                 email: user.email,
                 first_name: user.userName,
-                last_name: user.lastName,
-                phone_number: user.phone,
-                street: user.address.street,
-                building: user.address.building || 1,
-                floor: user.address.floor || 1,
-                apartment: user.address.apartment || 1,
-                city: user.address.city,
-                country: user.address.country,
-                state: user.address.state,
+                last_name: user.lastName || 'N/A',
+                phone_number: user.phone || 'N/A',
+                street: user.address?.street || 'N/A',
+                building: user.address?.building || 'N/A',
+                floor: user.address?.floor || 'N/A',
+                apartment: user.address?.apartment || 'N/A',
+                city: user.address?.city || 'N/A',
+                country: user.address?.country || 'N/A',
+                state: user.address?.state || 'N/A',
             },
             currency: 'EGP',
-            integration_id: process.env.PAYMOB_INTEGRATION_ID,
-        });
+            integration_id: PAYMOB_INTEGRATION_ID,
+        };
 
-        const { token: paymentToken } = paymentKeyResponse.data;
+        console.log('Payment Key Payload:', paymentKeyPayload);
 
-        // Save the order to the database
+        const paymentKeyResponse = await axios.post('https://accept.paymob.com/api/acceptance/payment_keys', paymentKeyPayload);
+
+        console.log('Payment Key Response:', paymentKeyResponse.data);
+
+        const paymentToken = paymentKeyResponse.data.token;
+        if (!paymentToken) {
+            console.error('Payment Key Response Error:', paymentKeyResponse.data);
+            return res.status(500).json({ error: 'Payment token is undefined', details: paymentKeyResponse.data });
+        }
+
+        // Save order
         const newOrder = new orderModel({
             userId: user._id,
             items: availableItems,
             totalPrice,
             paymentMethod,
             status: 'pending',
+            paymentToken,
+            paymobOrderId, // Store Paymob order ID
         });
 
         await newOrder.save();
 
+        // Send successful response
         res.status(200).json({
             success: true,
             message: 'Payment initiated successfully.',
             paymentToken,
-            orderId: newOrder._id,
+            orderId: newOrder._id, // Your internal order ID
+            paymobOrderId, // Paymob order ID
             totalPrice,
             paymentMethod,
             items: availableItems,
-            user: {
-                userId: user._id,
-                email: user.email,
-                firstName: user.userName,
-            },
+            user: { userId: user._id, email: user.email, firstName: user.userName },
         });
 
     } catch (error) {
@@ -137,70 +166,60 @@ export const createPayment = async (req, res) => {
     }
 };
 
-
-
 export const completePayment = async (req, res) => {
-    const { orderId } = req.params; // Get the orderId from the URL
-    const { paymentStatus, paymentDetails } = req.body; // Get payment details from the request body
+    const { orderId } = req.body; // Your internal order ID
 
     try {
-        // Find the order by ID
-        const order = await orderModel.findById(orderId);
+        // Find the order by orderId
+        const order = await orderModel.findById(orderId).select('paymentToken');
 
         if (!order) {
-            return res.status(404).json({ success: false, message: 'Order not found' });
+            return res.status(404).json({ success: false, error: 'Order not found' });
         }
 
-        // Check if payment was successful
-        if (paymentStatus !== 'success') {
-            return res.status(400).json({ success: false, message: 'Payment failed or not completed' });
-        }
+        const paymentToken = order.paymentToken;
+        console.log('Retrieved payment token:', paymentToken);
 
-        // Check if there is enough product quantity available
-        let isAvailable = true;
-        for (const item of order.items) {
-            // Find the product by its ID
-            const product = await productModel.findById(item.productId); // Correctly use productId here
-            if (!product || product.quantity < item.quantity) {
-                isAvailable = false;
-                console.log(`Checking product: ${product ? product.name : 'undefined'}, required: ${item.quantity}, available: ${product ? product.quantity : 'not found'}`);
-                break;
-            }
-        }
+        // Here you would typically verify the payment status with Paymob
+        // For simplicity, let's assume the payment is completed successfully
 
-        // If products are not available, cancel the order
-        if (!isAvailable) {
-            await orderModel.findByIdAndUpdate(orderId, { status: 'canceled' });
-            return res.status(400).json({ success: false, message: 'Order canceled due to insufficient product quantity.' });
-        }
+        // Update the order status
+        order.status = 'completed';
+        await order.save();
 
-        // Deduct the product quantities
-        for (const item of order.items) {
-            const product = await productModel.findById(item.productId); // Use productId to find the product
-            if (product) {
-                product.quantity -= item.quantity; // Deduct the quantity
-                await product.save(); // Save the updated product
-            }
-        }
-
-        // Update the order status to completed
-        const updatedOrder = await orderModel.findByIdAndUpdate(
-            orderId,
-            { status: 'completed', paymentDetails }, // Update order with new status and payment details
-            { new: true } // Return the updated order
-        );
-
-        // Send response back to the client
-        res.status(200).json({
-            success: true,
-            message: 'Payment completed and order status updated to completed.',
-            order: updatedOrder,
-            paymentDetails, // Include payment details in response
-        });
-
+        res.status(200).json({ success: true, message: 'Payment completed successfully', details: 'Order status updated to completed' });
     } catch (error) {
         console.error('Error in completing payment:', error);
-        res.status(500).json({ success: false, message: 'Server error', error: error.message });
+        res.status(500).json({ success: false, error: 'Payment completion failed', details: error.message });
     }
 };
 
+export const handlePaymobWebhook = async (req, res) => {
+    const data = req.body;
+
+    console.log('Incoming Request:', data); // Log the entire request for debugging
+
+    const paymobOrderId = data.order; // Paymob order ID
+
+    try {
+        // Lookup the order by Paymob order ID
+        const order = await orderModel.findOne({ paymobOrderId }); // Use paymobOrderId to find order
+
+        if (!order) {
+            return res.status(404).json({ error: 'Order not found' });
+        }
+
+        // Update order status based on payment success
+        if (data.success === true) {
+            order.status = 'completed'; // Update status to completed
+        } else {
+            order.status = 'failed'; // Update status to failed
+        }
+
+        await order.save();
+        return res.status(200).json({ message: 'Webhook processed successfully' });
+    } catch (error) {
+        console.error('Error processing webhook:', error); // Enhanced error logging
+        return res.status(500).json({ error: 'Internal server error' });
+    }
+};
