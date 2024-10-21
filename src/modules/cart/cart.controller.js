@@ -135,15 +135,22 @@ export const removeProductFromCart = catchError(async (req, res) => {
 
 export const getCartForUser = catchError(async (req, res) => {
     const userId = extractUserIdFromToken(req); 
-    const cart = await cartModel.findOne({ userId: userId });
+    const cart = await cartModel.findOne({ userId: userId }).populate({
+        path: 'items.productId',
+        model: productModel, // Use the product model to populate all product details
+    });
+
     if (!cart) {
         return res.status(404).json({ msg: "Cart not found" });
-    } else if (cart.totalPrice === 0) {
-        return res.json({ msg: "cart is empty", cart });
     }
+
+    if (cart.totalPrice === 0) {
+        return res.json({ msg: "Cart is empty", cart });
+    }
+
     return res.json({ msg: "Cart retrieved successfully", cart });
-    
 });
+
 
 export const clearCart = catchError(async (req, res) => {
     const userId = extractUserIdFromToken(req); 
@@ -162,7 +169,6 @@ export const clearCart = catchError(async (req, res) => {
 
     res.json({ msg: "Cart cleared successfully", cart });
 });
-
 
 export const processCashPayment = async (req, res) => {
     const { userId, items } = req.body;
